@@ -38,14 +38,14 @@ def train(args, log_dir, writer, logger):
 
     # Augmentation setup
     if args.scale:
-        aug = Compose([RandomChoice([RandomCropToSizeTorch(data_format='dict', size=(args.image_size, args.image_size)),
-                                     ResizePaddedTorch((0, 0), data_format='dict', size=(args.image_size, args.image_size))]),
-                       RandomRotations(format='cubi'),
+        aug = Compose([RandomChoice([RandomCropToSizeTorch(size=(args.image_size, args.image_size)),
+                                     ResizePaddedTorch((0, 0), size=(args.image_size, args.image_size))]),
+                       RandomRotations(),
                        DictToTensor(),
                        ColorJitterTorch()])
     else:
-        aug = Compose([RandomCropToSizeTorch(data_format='dict', size=(args.image_size, args.image_size)),
-                       RandomRotations(format='cubi'),
+        aug = Compose([RandomCropToSizeTorch(size=(args.image_size, args.image_size)),
+                       RandomRotations(),
                        DictToTensor(),
                        ColorJitterTorch()])
 
