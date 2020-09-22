@@ -1,6 +1,8 @@
 import matplotlib
+
+from floortrans.loaders.mm_dataset import MMDataset
+
 matplotlib.use('pdf')
-import sys
 import os
 import logging
 import json
@@ -52,10 +54,14 @@ def train(args, log_dir, writer, logger):
     # Setup Dataloader
     writer.add_text('parameters', str(vars(args)))
     logging.info('Loading data...')
-    train_set = FloorplanSVG(args.data_path, 'train.txt', format='lmdb',
-                             augmentations=aug)
-    val_set = FloorplanSVG(args.data_path, 'val.txt', format='lmdb',
-                           augmentations=DictToTensor())
+    if args.mm_data:
+        train_set = MMDataset(args.data_path, 'train', aug)
+        val_set = MMDataset(args.data_path, 'val', DictToTensor())
+    else:
+        train_set = FloorplanSVG(args.data_path, 'train.txt', format='lmdb',
+                                 augmentations=aug)
+        val_set = FloorplanSVG(args.data_path, 'val.txt', format='lmdb',
+                               augmentations=DictToTensor())
 
     if args.debug:
         num_workers = 0
@@ -357,7 +363,7 @@ def train(args, log_dir, writer, logger):
     torch.save(state, log_dir+"/model_last_epoch.pkl")
 
 
-if __name__ == '__main__':
+def main():
     time_stamp = datetime.now().strftime("%Y-%m-%d-%H:%M:%S")
     parser = argparse.ArgumentParser(description='Hyperparameters')
     parser.add_argument('--arch', nargs='?', type=str, default='hg_furukawa_original',
@@ -366,10 +372,11 @@ if __name__ == '__main__':
                         help='Optimizer to use [\'adam, sgd\']')
     parser.add_argument('--data-path', nargs='?', type=str, default='data/cubicasa5k/',
                         help='Path to data directory')
+    parser.add_argument('--mm-data', help='Dataset is on MM format.', action='store_true', default=False)
     parser.add_argument('--n-classes', nargs='?', type=int, default=44,
-                        help='# of the epochs')
+                        help='# of classes')
     parser.add_argument('--n-epoch', nargs='?', type=int, default=1000,
-                        help='# of the epochs')
+                        help='# of epochs')
     parser.add_argument('--batch-size', nargs='?', type=int, default=26,
                         help='Batch Size')
     parser.add_argument('--image-size', nargs='?', type=int, default=256,
@@ -415,3 +422,7 @@ if __name__ == '__main__':
     logger.addHandler(fh)
 
     train(args, log_dir, writer, logger)
+
+
+if __name__ == '__main__':
+    main()

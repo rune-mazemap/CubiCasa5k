@@ -9,7 +9,7 @@ from tqdm import tqdm
 from floortrans.loaders.svg_loader import FloorplanSVG
 
 
-def main(args, logger):
+def create_db(args, logger):
     logger.info("Opening database...")
     env = lmdb.open(args.lmdb, map_size=int(200e9))
 
@@ -38,7 +38,7 @@ def main(args, logger):
     logger.info("Database creation complete.")
 
 
-if __name__ == '__main__':
+def main():
     time_stamp = datetime.now().strftime("%Y-%m-%d-%H:%M:%S")
     parser = argparse.ArgumentParser(description='Script for creating lmdb database.')
     parser.add_argument('--txt', nargs='?', type=str, default='', required=True,
@@ -64,4 +64,8 @@ if __name__ == '__main__':
     fh.setFormatter(formatter)
     logger.addHandler(fh)
 
-    main(args, logger)
+    create_db(args, logger)
+
+
+if __name__ == '__main__':
+    main()
