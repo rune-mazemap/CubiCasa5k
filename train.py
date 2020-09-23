@@ -77,7 +77,8 @@ def train(args, log_dir, writer, logger):
 
     # Setup Model
     logging.info('Loading model...')
-    input_slice = [21, 12, 11]
+    input_slice = [21, args.n_rooms, args.n_icons]
+    n_classes = 21 + args.n_rooms + args.n_icons
     if args.arch == 'hg_furukawa_original':
         model = get_model(args.arch, 51)
         criterion = UncertaintyLoss(input_slice=input_slice)
@@ -87,13 +88,27 @@ def train(args, log_dir, writer, logger):
             model.load_state_dict(checkpoint['model_state'])
             criterion.load_state_dict(checkpoint['criterion_state'])
 
-        model.conv4_ = torch.nn.Conv2d(256, args.n_classes, bias=True, kernel_size=1)
-        model.upsample = torch.nn.ConvTranspose2d(args.n_classes, args.n_classes, kernel_size=4, stride=4)
+        # set up last layers for CubiCasa and load weights
+        if args.mm_data and args.weights is not None:
+            model.conv4_ = torch.nn.Conv2d(256, args.n_classes, bias=True, kernel_size=1)
+            model.upsample = torch.nn.ConvTranspose2d(args.n_classes, args.n_classes, kernel_size=4, stride=4)
+            if os.path.exists(args.weights):
+                logger.info("Loading model and optimizer from checkpoint '{}'".format(args.weights))
+                checkpoint = torch.load(args.weights)
+                model.load_state_dict(checkpoint['model_state'])
+                criterion.load_state_dict(checkpoint['criterion_state'])
+                logger.info("Loaded checkpoint '{}' (epoch {})".format(args.weights, checkpoint['epoch']))
+            else:
+                logger.info("No checkpoint found at '{}'".format(args.weights)) 
+                
+        # set up last layers for MM training        
+        model.conv4_ = torch.nn.Conv2d(256, n_classes, bias=True, kernel_size=1)
+        model.upsample = torch.nn.ConvTranspose2d(n_classes, n_classes, kernel_size=4, stride=4)
         for m in [model.conv4_, model.upsample]:
             nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
             nn.init.constant_(m.bias, 0)
     else:
-        model = get_model(args.arch, args.n_classes)
+        model = get_model(args.arch, n_classes)
         criterion = UncertaintyLoss(input_slice=input_slice)
 
     model.cuda()
@@ -131,7 +146,7 @@ def train(args, log_dir, writer, logger):
     running_metrics_icon_val = runningScore(input_slice[2])
     best_val_loss_variance = np.inf
     no_improvement = 0
-    if args.weights is not None:
+    if not args.mm_data and args.weights is not None:
         if os.path.exists(args.weights):
             logger.info("Loading model and optimizer from checkpoint '{}'".format(args.weights))
             checkpoint = torch.load(args.weights)
@@ -374,7 +389,11 @@ def main():
                         help='Path to data directory')
     parser.add_argument('--mm-data', help='Dataset is on MM format.', action='store_true', default=False)
     parser.add_argument('--n-classes', nargs='?', type=int, default=44,
-                        help='# of classes')
+                        help='# of classes in CubiCasa5k dataset')
+    parser.add_argument('--n-rooms', nargs='?', type=int, default=12,
+                        help='# of room classes')
+    parser.add_argument('--n-icons', nargs='?', type=int, default=11,
+                        help='# of icon classes')
     parser.add_argument('--n-epoch', nargs='?', type=int, default=1000,
                         help='# of epochs')
     parser.add_argument('--batch-size', nargs='?', type=int, default=26,
