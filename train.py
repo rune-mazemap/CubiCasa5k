@@ -162,7 +162,6 @@ def train(args, log_dir, writer, logger):
 
     for epoch in range(start_epoch, args.n_epoch):
         model.train()
-        lossess = []
         losses = pd.DataFrame()
         variances = pd.DataFrame()
         ss = pd.DataFrame()
@@ -175,7 +174,6 @@ def train(args, log_dir, writer, logger):
             outputs = model(images)
 
             loss = criterion(outputs, labels)
-            lossess.append(loss.item())
             losses = losses.append(criterion.get_loss(), ignore_index=True)
             variances = variances.append(criterion.get_var(), ignore_index=True)
             ss = ss.append(criterion.get_s(), ignore_index=True)
@@ -184,13 +182,11 @@ def train(args, log_dir, writer, logger):
             loss.backward()
             optimizer.step()
 
-        avg_loss = np.mean(lossess)
-        avg_loss = np.inf
         loss = losses.mean()
         variance = variances.mean()
         s = ss.mean()
 
-        logging.info("Epoch [%d/%d] Loss: %.4f" % (epoch + 1, args.n_epoch, avg_loss))
+        logging.info("Epoch [%d/%d]" % (epoch + 1, args.n_epoch))
 
         writer.add_scalars('training/loss', loss, global_step=1 + epoch)
         writer.add_scalars('training/variance', variance, global_step=1 + epoch)
