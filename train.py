@@ -1,41 +1,40 @@
-import matplotlib
-
-from floortrans.loaders.mm_dataset import MMDataset
-
-matplotlib.use('pdf')
-import os
-import logging
-import json
 import argparse
+import json
+import logging
+import os
+from datetime import datetime
+
+import matplotlib
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import numpy as np
-import pandas as pd
-from datetime import datetime
+from tensorboardX import SummaryWriter
+from torch.nn.functional import softmax
+from torch.optim.lr_scheduler import ReduceLROnPlateau
+from torch.utils import data
+from torchvision.transforms import RandomChoice
+from tqdm import tqdm
+
+from floortrans.loaders import FloorplanSVG
 from floortrans.loaders.augmentations import (RandomCropToSizeTorch,
                                               ResizePaddedTorch,
                                               Compose,
                                               DictToTensor,
                                               ColorJitterTorch,
                                               RandomRotations)
-from torchvision.transforms import RandomChoice
-from torch.utils import data
-from torch.nn.functional import softmax
-from tqdm import tqdm
-
-from floortrans.loaders import FloorplanSVG
-from floortrans.models import get_model
+from floortrans.loaders.mm_dataset import MMDataset
 from floortrans.losses import UncertaintyLoss
 from floortrans.metrics import get_px_acc, runningScore
-from tensorboardX import SummaryWriter
-from torch.optim.lr_scheduler import ReduceLROnPlateau
-import matplotlib.pyplot as plt
+from floortrans.models import get_model
+
+matplotlib.use('pdf')
 
 
 def train(args, log_dir, writer, logger):
-
-    with open(log_dir+'/args.json', 'w') as out:
+    with open(log_dir + '/args.json', 'w') as out:
         json.dump(vars(args), out, indent=4)
 
     # Augmentation setup
@@ -99,9 +98,9 @@ def train(args, log_dir, writer, logger):
                 criterion.load_state_dict(checkpoint['criterion_state'])
                 logger.info("Loaded checkpoint '{}' (epoch {})".format(args.weights, checkpoint['epoch']))
             else:
-                logger.info("No checkpoint found at '{}'".format(args.weights)) 
-                
-        # set up last layers for MM training        
+                logger.info("No checkpoint found at '{}'".format(args.weights))
+
+        # set up last layers for MM training
         model.conv4_ = torch.nn.Conv2d(256, n_classes, bias=True, kernel_size=1)
         model.upsample = torch.nn.ConvTranspose2d(n_classes, n_classes, kernel_size=4, stride=4)
         for m in [model.conv4_, model.upsample]:
@@ -127,12 +126,14 @@ def train(args, log_dir, writer, logger):
         optimizer = torch.optim.Adam(params, eps=1e-8, betas=(0.9, 0.999))
     elif args.optimizer == 'sgd':
         def lr_drop(epoch):
-            return (1 - epoch/args.n_epoch)**0.9
-        optimizer = torch.optim.SGD(params, momentum=0.9, weight_decay=10**-4, nesterov=True)
+            return (1 - epoch / args.n_epoch) ** 0.9
+
+        optimizer = torch.optim.SGD(params, momentum=0.9, weight_decay=10 ** -4, nesterov=True)
         scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lr_drop)
     elif args.optimizer == 'adam-scheduler':
         def lr_drop(epoch):
             return 0.5 ** np.floor(epoch / args.l_rate_drop)
+
         optimizer = torch.optim.Adam(params, eps=1e-8, betas=(0.9, 0.999))
         scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lr_drop)
 
@@ -140,7 +141,7 @@ def train(args, log_dir, writer, logger):
     best_loss = np.inf
     best_loss_var = np.inf
     best_train_loss = np.inf
-    best_acc = 0 
+    best_acc = 0
     start_epoch = 0
     running_metrics_room_val = runningScore(input_slice[1])
     running_metrics_icon_val = runningScore(input_slice[2])
@@ -157,7 +158,7 @@ def train(args, log_dir, writer, logger):
                 logger.info("Using old optimizer state.")
             logger.info("Loaded checkpoint '{}' (epoch {})".format(args.weights, checkpoint['epoch']))
         else:
-            logger.info("No checkpoint found at '{}'".format(args.weights)) 
+            logger.info("No checkpoint found at '{}'".format(args.weights))
 
     for epoch in range(start_epoch, args.n_epoch):
         model.train()
@@ -189,14 +190,14 @@ def train(args, log_dir, writer, logger):
         variance = variances.mean()
         s = ss.mean()
 
-        logging.info("Epoch [%d/%d] Loss: %.4f" % (epoch+1, args.n_epoch, avg_loss))
+        logging.info("Epoch [%d/%d] Loss: %.4f" % (epoch + 1, args.n_epoch, avg_loss))
 
-        writer.add_scalars('training/loss', loss, global_step=1+epoch)
-        writer.add_scalars('training/variance', variance, global_step=1+epoch)
-        writer.add_scalars('training/s', s, global_step=1+epoch)
+        writer.add_scalars('training/loss', loss, global_step=1 + epoch)
+        writer.add_scalars('training/variance', variance, global_step=1 + epoch)
+        writer.add_scalars('training/s', s, global_step=1 + epoch)
         current_lr = {'base': optimizer.param_groups[0]['lr'],
                       'var': optimizer.param_groups[1]['lr']}
-        writer.add_scalars('training/lr', current_lr, global_step=1+epoch)
+        writer.add_scalars('training/lr', current_lr, global_step=1 + epoch)
 
         # Validation
         model.eval()
@@ -215,12 +216,12 @@ def train(args, log_dir, writer, logger):
                 labels_val = F.interpolate(labels_val, size=outputs.shape[2:], mode='bilinear', align_corners=False)
                 loss = criterion(outputs, labels_val)
 
-                room_pred = outputs[0, input_slice[0]:input_slice[0]+input_slice[1]].argmax(0).data.cpu().numpy()
+                room_pred = outputs[0, input_slice[0]:input_slice[0] + input_slice[1]].argmax(0).data.cpu().numpy()
                 room_gt = labels_val[0, input_slice[0]].data.cpu().numpy()
                 running_metrics_room_val.update(room_gt, room_pred)
 
-                icon_pred = outputs[0, input_slice[0]+input_slice[1]:].argmax(0).data.cpu().numpy()
-                icon_gt = labels_val[0, input_slice[0]+1].data.cpu().numpy()
+                icon_pred = outputs[0, input_slice[0] + input_slice[1]:].argmax(0).data.cpu().numpy()
+                icon_gt = labels_val[0, input_slice[0] + 1].data.cpu().numpy()
                 running_metrics_icon_val.update(icon_gt, icon_pred)
                 total_px += outputs[0, 0].numel()
                 pr, pi = get_px_acc(outputs[0], labels_val[0], input_slice, 0)
@@ -234,10 +235,10 @@ def train(args, log_dir, writer, logger):
         val_loss = val_losses.mean()
         # print("CNN done", val_mid-val_start)
         val_variance = val_variances.mean()
-        logging.info("val_loss: "+str(val_loss))
-        writer.add_scalars('validation loss', val_loss, global_step=1+epoch)
+        logging.info("val_loss: " + str(val_loss))
+        writer.add_scalars('validation loss', val_loss, global_step=1 + epoch)
         # print(val_variance)
-        writer.add_scalars('validation variance', val_variance, global_step=1+epoch)
+        writer.add_scalars('validation variance', val_variance, global_step=1 + epoch)
         if args.optimizer == 'adam-patience':
             scheduler.step(val_loss['total loss with variance'])
         elif args.optimizer == 'adam-patience-previous-best':
@@ -247,44 +248,45 @@ def train(args, log_dir, writer, logger):
             else:
                 no_improvement += 1
             if no_improvement >= args.patience:
-                logger.info("No no_improvement for " + str(no_improvement) + " loading last best model and reducing learning rate.")
-                checkpoint = torch.load(log_dir+"/model_best_val_loss_var.pkl")
+                logger.info("No no_improvement for " + str(
+                    no_improvement) + " loading last best model and reducing learning rate.")
+                checkpoint = torch.load(log_dir + "/model_best_val_loss_var.pkl")
                 model.load_state_dict(checkpoint['model_state'])
                 for i, p in enumerate(optimizer.param_groups):
                     optimizer.param_groups[i]['lr'] = p['lr'] * 0.1
                 no_improvement = 0
 
         elif args.optimizer == 'sgd' or 'adam-scheduler':
-            scheduler.step(epoch+1)
+            scheduler.step(epoch + 1)
 
         val_variance = val_variances.mean()
         val_s = val_ss.mean()
-        logger.info("val_loss: "+str(val_loss))
+        logger.info("val_loss: " + str(val_loss))
         room_score, room_class_iou = running_metrics_room_val.get_scores()
-        writer.add_scalars('validation/room/general', room_score, global_step=1+epoch)
-        writer.add_scalars('validation/room/IoU', room_class_iou['Class IoU'], global_step=1+epoch)
-        writer.add_scalars('validation/room/Acc', room_class_iou['Class Acc'], global_step=1+epoch)
+        writer.add_scalars('validation/room/general', room_score, global_step=1 + epoch)
+        writer.add_scalars('validation/room/IoU', room_class_iou['Class IoU'], global_step=1 + epoch)
+        writer.add_scalars('validation/room/Acc', room_class_iou['Class Acc'], global_step=1 + epoch)
         running_metrics_room_val.reset()
 
         icon_score, icon_class_iou = running_metrics_icon_val.get_scores()
-        writer.add_scalars('validation/icon/general', icon_score, global_step=1+epoch)
-        writer.add_scalars('validation/icon/IoU', icon_class_iou['Class IoU'], global_step=1+epoch)
-        writer.add_scalars('validation/icon/Acc', icon_class_iou['Class Acc'], global_step=1+epoch)
+        writer.add_scalars('validation/icon/general', icon_score, global_step=1 + epoch)
+        writer.add_scalars('validation/icon/IoU', icon_class_iou['Class IoU'], global_step=1 + epoch)
+        writer.add_scalars('validation/icon/Acc', icon_class_iou['Class Acc'], global_step=1 + epoch)
         running_metrics_icon_val.reset()
 
-        writer.add_scalars('validation/loss', val_loss, global_step=1+epoch)
-        writer.add_scalars('validation/variance', val_variance, global_step=1+epoch)
-        writer.add_scalars('validation/s', val_s, global_step=1+epoch)
+        writer.add_scalars('validation/loss', val_loss, global_step=1 + epoch)
+        writer.add_scalars('validation/variance', val_variance, global_step=1 + epoch)
+        writer.add_scalars('validation/s', val_s, global_step=1 + epoch)
 
         if val_loss['total loss with variance'] < best_loss_var:
             best_loss_var = val_loss['total loss with variance']
             logger.info("Best validation loss with variance found saving model...")
-            state = {'epoch': epoch+1,
+            state = {'epoch': epoch + 1,
                      'model_state': model.state_dict(),
                      'criterion_state': criterion.state_dict(),
                      'optimizer_state': optimizer.state_dict(),
                      'best_loss': best_loss}
-            torch.save(state, log_dir+"/model_best_val_loss_var.pkl")
+            torch.save(state, log_dir + "/model_best_val_loss_var.pkl")
             # Making example prediction images to TensorBoard
             if args.plot_samples:
                 for i, samples_val in enumerate(valloader):
@@ -297,7 +299,7 @@ def train(args, log_dir, writer, logger):
 
                         if first_best:
                             # save image and label
-                            writer.add_image("Image "+str(i), images_val[0])
+                            writer.add_image("Image " + str(i), images_val[0])
                             # add_labels_tensorboard(writer, labels_val)
                             for j, l in enumerate(labels_val.squeeze().cpu().data.numpy()):
                                 fig = plt.figure(figsize=(18, 12))
@@ -307,7 +309,7 @@ def train(args, log_dir, writer, logger):
                                 else:
                                     cax = plot.imshow(l, vmin=0, vmax=19, cmap=plt.cm.tab20)
                                 fig.colorbar(cax)
-                                writer.add_figure("Image "+str(i)+" label/Channel "+str(j), fig)
+                                writer.add_figure("Image " + str(i) + " label/Channel " + str(j), fig)
 
                         outputs = model(images_val)
 
@@ -318,64 +320,64 @@ def train(args, log_dir, writer, logger):
                         rooms_pred = softmax(rooms_pred, 1).cpu().data.numpy()
                         icons_pred = softmax(icons_pred, 1).cpu().data.numpy()
 
-                        label = "Image "+str(i)+" prediction/Channel "
+                        label = "Image " + str(i) + " prediction/Channel "
 
                         for j, l in enumerate(np.squeeze(heatmap_pred)):
                             fig = plt.figure(figsize=(18, 12))
                             plot = fig.add_subplot(111)
                             cax = plot.imshow(l, vmin=0, vmax=1)
                             fig.colorbar(cax)
-                            writer.add_figure(label+str(j), fig, global_step=1+epoch)
+                            writer.add_figure(label + str(j), fig, global_step=1 + epoch)
 
                         fig = plt.figure(figsize=(18, 12))
                         plot = fig.add_subplot(111)
                         cax = plot.imshow(np.argmax(np.squeeze(rooms_pred), axis=0), vmin=0, vmax=19, cmap=plt.cm.tab20)
                         fig.colorbar(cax)
-                        writer.add_figure(label+str(j+1), fig, global_step=1+epoch)
+                        writer.add_figure(label + str(j + 1), fig, global_step=1 + epoch)
 
                         fig = plt.figure(figsize=(18, 12))
                         plot = fig.add_subplot(111)
                         cax = plot.imshow(np.argmax(np.squeeze(icons_pred), axis=0), vmin=0, vmax=19, cmap=plt.cm.tab20)
                         fig.colorbar(cax)
-                        writer.add_figure(label+str(j+2), fig, global_step=1+epoch)
+                        writer.add_figure(label + str(j + 2), fig, global_step=1 + epoch)
 
             first_best = False
 
         if val_loss['total loss'] < best_loss:
             best_loss = val_loss['total loss']
             logger.info("Best validation loss found saving model...")
-            state = {'epoch': epoch+1,
+            state = {'epoch': epoch + 1,
                      'model_state': model.state_dict(),
                      'criterion_state': criterion.state_dict(),
                      'optimizer_state': optimizer.state_dict(),
                      'best_loss': best_loss}
-            torch.save(state, log_dir+"/model_best_val_loss.pkl")
+            torch.save(state, log_dir + "/model_best_val_loss.pkl")
 
         px_acc = room_score["Mean Acc"] + icon_score["Mean Acc"]
         if px_acc > best_acc:
             best_acc = px_acc
             logger.info("Best validation pixel accuracy found saving model...")
-            state = {'epoch': epoch+1,
+            state = {'epoch': epoch + 1,
                      'model_state': model.state_dict(),
                      'criterion_state': criterion.state_dict(),
                      'optimizer_state': optimizer.state_dict()}
-            torch.save(state, log_dir+"/model_best_val_acc.pkl")
+            torch.save(state, log_dir + "/model_best_val_acc.pkl")
 
         if avg_loss < best_train_loss:
             best_train_loss = avg_loss
             logger.info("Best training loss with variance...")
-            state = {'epoch': epoch+1,
+            state = {'epoch': epoch + 1,
                      'model_state': model.state_dict(),
                      'criterion_state': criterion.state_dict(),
                      'optimizer_state': optimizer.state_dict()}
-            torch.save(state, log_dir+"/model_best_train_loss_var.pkl")
+            torch.save(state, log_dir + "/model_best_train_loss_var.pkl")
 
     logger.info("Last epoch done saving final model...")
-    state = {'epoch': epoch+1,
+    state = {'epoch': epoch + 1,
              'model_state': model.state_dict(),
              'criterion_state': criterion.state_dict(),
              'optimizer_state': optimizer.state_dict()}
-    torch.save(state, log_dir+"/model_last_epoch.pkl")
+    torch.save(state, log_dir + "/model_last_epoch.pkl")
 
 
 def main():
@@ -434,7 +436,7 @@ def main():
     writer = SummaryWriter(log_dir)
     logger = logging.getLogger('train')
     logger.setLevel(logging.DEBUG)
-    fh = logging.FileHandler(log_dir+'/train.log')
+    fh = logging.FileHandler(log_dir + '/train.log')
     fh.setLevel(logging.DEBUG)
     formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
     fh.setFormatter(formatter)
