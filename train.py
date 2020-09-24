@@ -182,13 +182,14 @@ def train(args, log_dir, writer, logger):
             loss.backward()
             optimizer.step()
 
-        loss = losses.mean()
+        mean_losses = losses.mean()
+        avg_loss = mean_losses['total loss with variance']
         variance = variances.mean()
         s = ss.mean()
 
-        logging.info("Epoch [%d/%d]" % (epoch + 1, args.n_epoch))
+        logging.info("Epoch [%d/%d] Loss: %.4f" % (epoch + 1, args.n_epoch, avg_loss))
 
-        writer.add_scalars('training/loss', loss, global_step=1 + epoch)
+        writer.add_scalars('training/loss', mean_losses, global_step=1 + epoch)
         writer.add_scalars('training/variance', variance, global_step=1 + epoch)
         writer.add_scalars('training/s', s, global_step=1 + epoch)
         current_lr = {'base': optimizer.param_groups[0]['lr'],
@@ -210,7 +211,7 @@ def train(args, log_dir, writer, logger):
 
                 outputs = model(images_val)
                 labels_val = F.interpolate(labels_val, size=outputs.shape[2:], mode='bilinear', align_corners=False)
-                loss = criterion(outputs, labels_val)
+                criterion(outputs, labels_val)
 
                 room_pred = outputs[0, input_slice[0]:input_slice[0] + input_slice[1]].argmax(0).data.cpu().numpy()
                 room_gt = labels_val[0, input_slice[0]].data.cpu().numpy()
