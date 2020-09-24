@@ -147,6 +147,7 @@ def train(args, log_dir, writer, logger):
     running_metrics_icon_val = runningScore(input_slice[2])
     best_val_loss_variance = np.inf
     no_improvement = 0
+    lr_reductions = 0
     if not args.mm_data and args.weights is not None:
         if os.path.exists(args.weights):
             logger.info("Loading model and optimizer from checkpoint '{}'".format(args.weights))
@@ -177,7 +178,7 @@ def train(args, log_dir, writer, logger):
             losses = losses.append(criterion.get_loss(), ignore_index=True)
             variances = variances.append(criterion.get_var(), ignore_index=True)
             ss = ss.append(criterion.get_s(), ignore_index=True)
-
+            
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
@@ -187,7 +188,7 @@ def train(args, log_dir, writer, logger):
         variance = variances.mean()
         s = ss.mean()
 
-        logging.info("Epoch [%d/%d] Loss: %.4f" % (epoch + 1, args.n_epoch, avg_loss))
+        logger.info(f"Epoch [{epoch + 1}/{args.n_epoch}] - avg loss: {avg_loss}")
 
         writer.add_scalars('training/loss', mean_losses, global_step=1 + epoch)
         writer.add_scalars('training/variance', variance, global_step=1 + epoch)
@@ -197,168 +198,170 @@ def train(args, log_dir, writer, logger):
         writer.add_scalars('training/lr', current_lr, global_step=1 + epoch)
 
         # Validation
-        model.eval()
-        val_losses = pd.DataFrame()
-        val_variances = pd.DataFrame()
-        val_ss = pd.DataFrame()
-        px_rooms = 0
-        px_icons = 0
-        total_px = 0
-        for i_val, samples_val in tqdm(enumerate(valloader), total=len(valloader), ncols=80, leave=False):
-            with torch.no_grad():
-                images_val = samples_val['image'].cuda(non_blocking=True)
-                labels_val = samples_val['label'].cuda(non_blocking=True)
+        if epoch % args.val_interval == 0:
+            model.eval()
+            val_losses = pd.DataFrame()
+            val_variances = pd.DataFrame()
+            val_ss = pd.DataFrame()
+            px_rooms = 0
+            px_icons = 0
+            total_px = 0
+            for i_val, samples_val in tqdm(enumerate(valloader), total=len(valloader), ncols=80, leave=False):
+                with torch.no_grad():
+                    images_val = samples_val['image'].cuda(non_blocking=True)
+                    labels_val = samples_val['label'].cuda(non_blocking=True)
 
-                outputs = model(images_val)
-                labels_val = F.interpolate(labels_val, size=outputs.shape[2:], mode='bilinear', align_corners=False)
-                criterion(outputs, labels_val)
+                    outputs = model(images_val)
+                    labels_val = F.interpolate(labels_val, size=outputs.shape[2:], mode='bilinear', align_corners=False)
+                    criterion(outputs, labels_val)
 
-                room_pred = outputs[0, input_slice[0]:input_slice[0] + input_slice[1]].argmax(0).data.cpu().numpy()
-                room_gt = labels_val[0, input_slice[0]].data.cpu().numpy()
-                running_metrics_room_val.update(room_gt, room_pred)
+                    room_pred = outputs[0, input_slice[0]:input_slice[0] + input_slice[1]].argmax(0).data.cpu().numpy()
+                    room_gt = labels_val[0, input_slice[0]].data.cpu().numpy()
+                    running_metrics_room_val.update(room_gt, room_pred)
 
-                icon_pred = outputs[0, input_slice[0] + input_slice[1]:].argmax(0).data.cpu().numpy()
-                icon_gt = labels_val[0, input_slice[0] + 1].data.cpu().numpy()
-                running_metrics_icon_val.update(icon_gt, icon_pred)
-                total_px += outputs[0, 0].numel()
-                pr, pi = get_px_acc(outputs[0], labels_val[0], input_slice, 0)
-                px_rooms += float(pr)
-                px_icons += float(pi)
+                    icon_pred = outputs[0, input_slice[0] + input_slice[1]:].argmax(0).data.cpu().numpy()
+                    icon_gt = labels_val[0, input_slice[0] + 1].data.cpu().numpy()
+                    running_metrics_icon_val.update(icon_gt, icon_pred)
+                    total_px += outputs[0, 0].numel()
+                    pr, pi = get_px_acc(outputs[0], labels_val[0], input_slice, 0)
+                    px_rooms += float(pr)
+                    px_icons += float(pi)
 
-                val_losses = val_losses.append(criterion.get_loss(), ignore_index=True)
-                val_variances = val_variances.append(criterion.get_var(), ignore_index=True)
-                val_ss = val_ss.append(criterion.get_s(), ignore_index=True)
+                    val_losses = val_losses.append(criterion.get_loss(), ignore_index=True)
+                    val_variances = val_variances.append(criterion.get_var(), ignore_index=True)
+                    val_ss = val_ss.append(criterion.get_s(), ignore_index=True)
 
-        val_loss = val_losses.mean()
-        # print("CNN done", val_mid-val_start)
-        val_variance = val_variances.mean()
-        logging.info("val_loss: " + str(val_loss))
-        writer.add_scalars('validation loss', val_loss, global_step=1 + epoch)
-        # print(val_variance)
-        writer.add_scalars('validation variance', val_variance, global_step=1 + epoch)
-        if args.optimizer == 'adam-patience':
-            scheduler.step(val_loss['total loss with variance'])
-        elif args.optimizer == 'adam-patience-previous-best':
-            if best_val_loss_variance > val_loss['total loss with variance']:
-                best_val_loss_variance = val_loss['total loss with variance']
-                no_improvement = 0
-            else:
-                no_improvement += 1
-            if no_improvement >= args.patience:
-                logger.info("No no_improvement for " + str(
-                    no_improvement) + " loading last best model and reducing learning rate.")
-                checkpoint = torch.load(log_dir + "/model_best_val_loss_var.pkl")
-                model.load_state_dict(checkpoint['model_state'])
-                for i, p in enumerate(optimizer.param_groups):
-                    optimizer.param_groups[i]['lr'] = p['lr'] * 0.1
-                no_improvement = 0
+            val_loss = val_losses.mean()
+            # print("CNN done", val_mid-val_start)
+            val_variance = val_variances.mean()
+            # logging.info("val_loss: " + str(val_loss))
+            writer.add_scalars('validation loss', val_loss, global_step=1 + epoch)
+            # print(val_variance)
+            writer.add_scalars('validation variance', val_variance, global_step=1 + epoch)
+            if args.optimizer == 'adam-patience':
+                scheduler.step(val_loss['total loss with variance'])
+            elif args.optimizer == 'adam-patience-previous-best':
+                if best_val_loss_variance > val_loss['total loss with variance']:
+                    best_val_loss_variance = val_loss['total loss with variance']
+                    no_improvement = 0
+                else:
+                    no_improvement += 1
+                if no_improvement >= args.patience:
+                    logger.info("No no_improvement for " + str(
+                        no_improvement) + " loading last best model and reducing learning rate.")
+                    checkpoint = torch.load(log_dir + "/model_best_val_loss_var.pkl")
+                    model.load_state_dict(checkpoint['model_state'])
+                    for i, p in enumerate(optimizer.param_groups):
+                        optimizer.param_groups[i]['lr'] = p['lr'] * 0.1
+                    no_improvement = 0
+                    lr_reductions += 1
 
-        elif args.optimizer == 'sgd' or 'adam-scheduler':
-            scheduler.step(epoch + 1)
+            elif args.optimizer == 'sgd' or 'adam-scheduler':
+                scheduler.step(epoch + 1)
 
-        val_variance = val_variances.mean()
-        val_s = val_ss.mean()
-        logger.info("val_loss: " + str(val_loss))
-        room_score, room_class_iou = running_metrics_room_val.get_scores()
-        writer.add_scalars('validation/room/general', room_score, global_step=1 + epoch)
-        writer.add_scalars('validation/room/IoU', room_class_iou['Class IoU'], global_step=1 + epoch)
-        writer.add_scalars('validation/room/Acc', room_class_iou['Class Acc'], global_step=1 + epoch)
-        running_metrics_room_val.reset()
+            val_variance = val_variances.mean()
+            val_s = val_ss.mean()
+            logger.info("val_loss: " + str(val_loss))
+            room_score, room_class_iou = running_metrics_room_val.get_scores()
+            writer.add_scalars('validation/room/general', room_score, global_step=1 + epoch)
+            writer.add_scalars('validation/room/IoU', room_class_iou['Class IoU'], global_step=1 + epoch)
+            writer.add_scalars('validation/room/Acc', room_class_iou['Class Acc'], global_step=1 + epoch)
+            running_metrics_room_val.reset()
 
-        icon_score, icon_class_iou = running_metrics_icon_val.get_scores()
-        writer.add_scalars('validation/icon/general', icon_score, global_step=1 + epoch)
-        writer.add_scalars('validation/icon/IoU', icon_class_iou['Class IoU'], global_step=1 + epoch)
-        writer.add_scalars('validation/icon/Acc', icon_class_iou['Class Acc'], global_step=1 + epoch)
-        running_metrics_icon_val.reset()
+            icon_score, icon_class_iou = running_metrics_icon_val.get_scores()
+            writer.add_scalars('validation/icon/general', icon_score, global_step=1 + epoch)
+            writer.add_scalars('validation/icon/IoU', icon_class_iou['Class IoU'], global_step=1 + epoch)
+            writer.add_scalars('validation/icon/Acc', icon_class_iou['Class Acc'], global_step=1 + epoch)
+            running_metrics_icon_val.reset()
 
-        writer.add_scalars('validation/loss', val_loss, global_step=1 + epoch)
-        writer.add_scalars('validation/variance', val_variance, global_step=1 + epoch)
-        writer.add_scalars('validation/s', val_s, global_step=1 + epoch)
+            writer.add_scalars('validation/loss', val_loss, global_step=1 + epoch)
+            writer.add_scalars('validation/variance', val_variance, global_step=1 + epoch)
+            writer.add_scalars('validation/s', val_s, global_step=1 + epoch)
 
-        if val_loss['total loss with variance'] < best_loss_var:
-            best_loss_var = val_loss['total loss with variance']
-            logger.info("Best validation loss with variance found saving model...")
-            state = {'epoch': epoch + 1,
-                     'model_state': model.state_dict(),
-                     'criterion_state': criterion.state_dict(),
-                     'optimizer_state': optimizer.state_dict(),
-                     'best_loss': best_loss}
-            torch.save(state, log_dir + "/model_best_val_loss_var.pkl")
-            # Making example prediction images to TensorBoard
-            if args.plot_samples:
-                for i, samples_val in enumerate(valloader):
-                    with torch.no_grad():
-                        if i == 4:
-                            break
+            if val_loss['total loss with variance'] < best_loss_var:
+                best_loss_var = val_loss['total loss with variance']
+                logger.info("Best validation loss with variance found saving model...")
+                state = {'epoch': epoch + 1,
+                         'model_state': model.state_dict(),
+                         'criterion_state': criterion.state_dict(),
+                         'optimizer_state': optimizer.state_dict(),
+                         'best_loss': best_loss}
+                torch.save(state, log_dir + "/model_best_val_loss_var.pkl")
+                # Making example prediction images to TensorBoard
+                if args.plot_samples:
+                    for i, samples_val in enumerate(valloader):
+                        with torch.no_grad():
+                            if i == 4:
+                                break
 
-                        images_val = samples_val['image'].cuda(non_blocking=True)
-                        labels_val = samples_val['label'].cuda(non_blocking=True)
+                            images_val = samples_val['image'].cuda(non_blocking=True)
+                            labels_val = samples_val['label'].cuda(non_blocking=True)
 
-                        if first_best:
-                            # save image and label
-                            writer.add_image("Image " + str(i), images_val[0])
-                            # add_labels_tensorboard(writer, labels_val)
-                            for j, l in enumerate(labels_val.squeeze().cpu().data.numpy()):
+                            if first_best:
+                                # save image and label
+                                writer.add_image("Image " + str(i), images_val[0])
+                                # add_labels_tensorboard(writer, labels_val)
+                                for j, l in enumerate(labels_val.squeeze().cpu().data.numpy()):
+                                    fig = plt.figure(figsize=(18, 12))
+                                    plot = fig.add_subplot(111)
+                                    if j < 21:
+                                        cax = plot.imshow(l, vmin=0, vmax=1)
+                                    else:
+                                        cax = plot.imshow(l, vmin=0, vmax=19, cmap=plt.cm.tab20)
+                                    fig.colorbar(cax)
+                                    writer.add_figure("Image " + str(i) + " label/Channel " + str(j), fig)
+
+                            outputs = model(images_val)
+
+                            # add_predictions_tensorboard(writer, outputs, epoch)
+                            pred_arr = torch.split(outputs, input_slice, 1)
+                            heatmap_pred, rooms_pred, icons_pred = pred_arr
+
+                            rooms_pred = softmax(rooms_pred, 1).cpu().data.numpy()
+                            icons_pred = softmax(icons_pred, 1).cpu().data.numpy()
+
+                            label = "Image " + str(i) + " prediction/Channel "
+
+                            for j, l in enumerate(np.squeeze(heatmap_pred)):
                                 fig = plt.figure(figsize=(18, 12))
                                 plot = fig.add_subplot(111)
-                                if j < 21:
-                                    cax = plot.imshow(l, vmin=0, vmax=1)
-                                else:
-                                    cax = plot.imshow(l, vmin=0, vmax=19, cmap=plt.cm.tab20)
+                                cax = plot.imshow(l, vmin=0, vmax=1)
                                 fig.colorbar(cax)
-                                writer.add_figure("Image " + str(i) + " label/Channel " + str(j), fig)
+                                writer.add_figure(label + str(j), fig, global_step=1 + epoch)
 
-                        outputs = model(images_val)
-
-                        # add_predictions_tensorboard(writer, outputs, epoch)
-                        pred_arr = torch.split(outputs, input_slice, 1)
-                        heatmap_pred, rooms_pred, icons_pred = pred_arr
-
-                        rooms_pred = softmax(rooms_pred, 1).cpu().data.numpy()
-                        icons_pred = softmax(icons_pred, 1).cpu().data.numpy()
-
-                        label = "Image " + str(i) + " prediction/Channel "
-
-                        for j, l in enumerate(np.squeeze(heatmap_pred)):
                             fig = plt.figure(figsize=(18, 12))
                             plot = fig.add_subplot(111)
-                            cax = plot.imshow(l, vmin=0, vmax=1)
+                            cax = plot.imshow(np.argmax(np.squeeze(rooms_pred), axis=0), vmin=0, vmax=19, cmap=plt.cm.tab20)
                             fig.colorbar(cax)
-                            writer.add_figure(label + str(j), fig, global_step=1 + epoch)
+                            writer.add_figure(label + str(j + 1), fig, global_step=1 + epoch)
 
-                        fig = plt.figure(figsize=(18, 12))
-                        plot = fig.add_subplot(111)
-                        cax = plot.imshow(np.argmax(np.squeeze(rooms_pred), axis=0), vmin=0, vmax=19, cmap=plt.cm.tab20)
-                        fig.colorbar(cax)
-                        writer.add_figure(label + str(j + 1), fig, global_step=1 + epoch)
+                            fig = plt.figure(figsize=(18, 12))
+                            plot = fig.add_subplot(111)
+                            cax = plot.imshow(np.argmax(np.squeeze(icons_pred), axis=0), vmin=0, vmax=19, cmap=plt.cm.tab20)
+                            fig.colorbar(cax)
+                            writer.add_figure(label + str(j + 2), fig, global_step=1 + epoch)
 
-                        fig = plt.figure(figsize=(18, 12))
-                        plot = fig.add_subplot(111)
-                        cax = plot.imshow(np.argmax(np.squeeze(icons_pred), axis=0), vmin=0, vmax=19, cmap=plt.cm.tab20)
-                        fig.colorbar(cax)
-                        writer.add_figure(label + str(j + 2), fig, global_step=1 + epoch)
+                first_best = False
 
-            first_best = False
+            if val_loss['total loss'] < best_loss:
+                best_loss = val_loss['total loss']
+                logger.info("Best validation loss found saving model...")
+                state = {'epoch': epoch + 1,
+                         'model_state': model.state_dict(),
+                         'criterion_state': criterion.state_dict(),
+                         'optimizer_state': optimizer.state_dict(),
+                         'best_loss': best_loss}
+                torch.save(state, log_dir + "/model_best_val_loss.pkl")
 
-        if val_loss['total loss'] < best_loss:
-            best_loss = val_loss['total loss']
-            logger.info("Best validation loss found saving model...")
-            state = {'epoch': epoch + 1,
-                     'model_state': model.state_dict(),
-                     'criterion_state': criterion.state_dict(),
-                     'optimizer_state': optimizer.state_dict(),
-                     'best_loss': best_loss}
-            torch.save(state, log_dir + "/model_best_val_loss.pkl")
-
-        px_acc = room_score["Mean Acc"] + icon_score["Mean Acc"]
-        if px_acc > best_acc:
-            best_acc = px_acc
-            logger.info("Best validation pixel accuracy found saving model...")
-            state = {'epoch': epoch + 1,
-                     'model_state': model.state_dict(),
-                     'criterion_state': criterion.state_dict(),
-                     'optimizer_state': optimizer.state_dict()}
-            torch.save(state, log_dir + "/model_best_val_acc.pkl")
+            px_acc = room_score["Mean Acc"] + icon_score["Mean Acc"]
+            if px_acc > best_acc:
+                best_acc = px_acc
+                logger.info("Best validation pixel accuracy found saving model...")
+                state = {'epoch': epoch + 1,
+                         'model_state': model.state_dict(),
+                         'criterion_state': criterion.state_dict(),
+                         'optimizer_state': optimizer.state_dict()}
+                torch.save(state, log_dir + "/model_best_val_acc.pkl")
 
         if avg_loss < best_train_loss:
             best_train_loss = avg_loss
@@ -368,6 +371,10 @@ def train(args, log_dir, writer, logger):
                      'criterion_state': criterion.state_dict(),
                      'optimizer_state': optimizer.state_dict()}
             torch.save(state, log_dir + "/model_best_train_loss_var.pkl")
+        
+        if lr_reductions >= args.super_patience:
+            logger.info('Reduced learning rate {lr_reductions} times. Stopping early.')
+            break
 
     logger.info("Last epoch done saving final model...")
     state = {'epoch': epoch + 1,
@@ -407,6 +414,7 @@ def main():
                         help='Learning rate drop after how many epochs?')
     parser.add_argument('--patience', nargs='?', type=int, default=10,
                         help='Learning rate drop patience')
+    parser.add_argument('--super-patience', type=int, help='Number of learning rate reductions before stopping early', default=10)
     parser.add_argument('--feature-scale', nargs='?', type=int, default=1,
                         help='Divider for # of features to use')
     parser.add_argument('--weights', nargs='?', type=str, default=None,
@@ -427,6 +435,7 @@ def main():
     parser.add_argument('--scale', nargs='?', type=bool,
                         default=False, const=True,
                         help='Rescale to 256x256 augmentation.')
+    parser.add_argument('--val_interval', type=int, help='Number of epochs between each validation', default=1)
     args = parser.parse_args()
 
     log_dir = args.log_path + '/' + time_stamp + '/'
