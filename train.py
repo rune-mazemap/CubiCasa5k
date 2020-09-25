@@ -69,6 +69,11 @@ def train(args, log_dir, writer, logger):
     else:
         num_workers = 8
 
+    if args.gpu is not None:
+        logger.info('Running on GPU {}'.format(args.gpu))
+        os.environ['CUDA_DEVICE_ORDER'] = 'PCI_BUS_ID'
+        os.environ['CUDA_VISIBLE_DEVICES'] = str(args.gpu)
+
     trainloader = data.DataLoader(train_set, batch_size=args.batch_size,
                                   num_workers=num_workers, shuffle=True, pin_memory=True)
     valloader = data.DataLoader(val_set, batch_size=1,
@@ -178,7 +183,7 @@ def train(args, log_dir, writer, logger):
             losses = losses.append(criterion.get_loss(), ignore_index=True)
             variances = variances.append(criterion.get_var(), ignore_index=True)
             ss = ss.append(criterion.get_s(), ignore_index=True)
-            
+
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
@@ -331,13 +336,15 @@ def train(args, log_dir, writer, logger):
 
                             fig = plt.figure(figsize=(18, 12))
                             plot = fig.add_subplot(111)
-                            cax = plot.imshow(np.argmax(np.squeeze(rooms_pred), axis=0), vmin=0, vmax=19, cmap=plt.cm.tab20)
+                            cax = plot.imshow(np.argmax(np.squeeze(rooms_pred), axis=0), vmin=0, vmax=19,
+                                              cmap=plt.cm.tab20)
                             fig.colorbar(cax)
                             writer.add_figure(label + str(j + 1), fig, global_step=1 + epoch)
 
                             fig = plt.figure(figsize=(18, 12))
                             plot = fig.add_subplot(111)
-                            cax = plot.imshow(np.argmax(np.squeeze(icons_pred), axis=0), vmin=0, vmax=19, cmap=plt.cm.tab20)
+                            cax = plot.imshow(np.argmax(np.squeeze(icons_pred), axis=0), vmin=0, vmax=19,
+                                              cmap=plt.cm.tab20)
                             fig.colorbar(cax)
                             writer.add_figure(label + str(j + 2), fig, global_step=1 + epoch)
 
@@ -371,7 +378,7 @@ def train(args, log_dir, writer, logger):
                      'criterion_state': criterion.state_dict(),
                      'optimizer_state': optimizer.state_dict()}
             torch.save(state, log_dir + "/model_best_train_loss_var.pkl")
-        
+
         if lr_reductions >= args.super_patience:
             logger.info('Reduced learning rate {lr_reductions} times. Stopping early.')
             break
@@ -414,7 +421,8 @@ def main():
                         help='Learning rate drop after how many epochs?')
     parser.add_argument('--patience', nargs='?', type=int, default=10,
                         help='Learning rate drop patience')
-    parser.add_argument('--super-patience', type=int, help='Number of learning rate reductions before stopping early', default=10)
+    parser.add_argument('--super-patience', type=int, help='Number of learning rate reductions before stopping early',
+                        default=10)
     parser.add_argument('--feature-scale', nargs='?', type=int, default=1,
                         help='Divider for # of features to use')
     parser.add_argument('--weights', nargs='?', type=str, default=None,
@@ -436,6 +444,7 @@ def main():
                         default=False, const=True,
                         help='Rescale to 256x256 augmentation.')
     parser.add_argument('--val_interval', type=int, help='Number of epochs between each validation', default=1)
+    parser.add_argument('--gpu', help='Use GPU for training', default=None, type=int)
     args = parser.parse_args()
 
     log_dir = args.log_path + '/' + time_stamp + '/'
