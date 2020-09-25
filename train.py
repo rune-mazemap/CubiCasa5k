@@ -115,12 +115,15 @@ def train(args, log_dir, writer, logger):
         model = get_model(args.arch, n_classes)
         criterion = UncertaintyLoss(input_slice=input_slice)
 
-    model.cuda()
-
     # Drawing graph for TensorBoard
-    dummy = torch.zeros((2, 3, args.image_size, args.image_size)).cuda()
+    dummy = torch.zeros((2, 3, args.image_size, args.image_size))
     model(dummy)
     writer.add_graph(model, dummy)
+
+    if args.gpu is None and torch.cuda.device_count() > 1:
+        logger.info('Running on {} GPUs is parallel'.format(torch.cuda.device_count()))
+        model = nn.DataParallel(model)
+    model.cuda()
 
     params = [{'params': model.parameters(), 'lr': args.l_rate},
               {'params': criterion.parameters(), 'lr': args.l_rate}]
