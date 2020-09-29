@@ -234,7 +234,7 @@ class RotateNTurns(object):
 
 
 class RandomCropToSizeTorch(object):
-    def __init__(self, input_slice=[21, 1, 1], size=(256, 256), fill=(0, 0),
+    def __init__(self, input_slice=[21, 1, 1], size=(256, 256), fill=(255, 0, 0),
                  dtype=torch.float32, max_size=None):
         self.size = size
         self.width = size[0]
@@ -255,12 +255,12 @@ class RandomCropToSizeTorch(object):
         new_w = self.width + img_w
         new_h = self.height + img_h
 
-        new_image = torch.full([image.shape[0], new_h, new_w], 255, dtype=self.dtype)
+        new_image = torch.full([image.shape[0], new_h, new_w], self.fill[0], dtype=self.dtype)
         new_image[:, pad_h:img_h + pad_h, pad_w:img_w + pad_w] = image
 
-        new_rooms = torch.full((1, new_h, new_w), self.fill[0], dtype=self.dtype)
+        new_rooms = torch.full((1, new_h, new_w), self.fill[1], dtype=self.dtype)
         new_rooms[:, pad_h:img_h + pad_h, pad_w:img_w + pad_w] = label[0]
-        new_icons = torch.full((1, new_h, new_w), self.fill[1], dtype=self.dtype)
+        new_icons = torch.full((1, new_h, new_w), self.fill[2], dtype=self.dtype)
         new_icons[:, pad_h:img_h + pad_h, pad_w:img_w + pad_w] = label[1]
 
         label = torch.cat((new_rooms, new_icons), 0)

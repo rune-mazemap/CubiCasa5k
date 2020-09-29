@@ -54,6 +54,10 @@ def train(args, log_dir, writer, logger):
     writer.add_text('parameters', str(vars(args)))
     logging.info('Loading data...')
     if args.mm_data:
+        aug = Compose([RandomCropToSizeTorch(size=(args.image_size, args.image_size), fill=(1, 0, 0)),
+                       RandomRotations(),
+                       DictToTensor(),
+                       ColorJitterTorch()])
         train_set = MMDataset(args.data_path, 'train', aug)
         val_set = MMDataset(args.data_path, 'val', DictToTensor())
     else:
