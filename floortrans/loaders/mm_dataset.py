@@ -23,9 +23,9 @@ class MMDataset(Dataset):
             data = txn.get(key)
         sample = pickle.loads(data)
         sample['label'] = torch.tensor(sample['label'].astype(np.float32))
-        sample['image'] = self._prepare_img_data(sample['image'])
         if self.augmentations:
             sample = self.augmentations(sample)
+        sample['image'] = self._normalize_img_data(sample['image'])
         return sample
 
     def __len__(self):
@@ -39,7 +39,7 @@ class MMDataset(Dataset):
         return keys
 
     @staticmethod
-    def _prepare_img_data(img_data):
+    def _normalize_img_data(img_data):
         # normalize values to range -1, 1
         return 2. * (torch.tensor(img_data.astype(np.float32)) / 255.) - 1.
 
@@ -47,3 +47,4 @@ class MMDataset(Dataset):
     def close():
         if MMDataset._lmdb_env:
             MMDataset._lmdb_env.close()
+            MMDataset._lmdb_env = None
