@@ -69,12 +69,14 @@ class RandomRotations(object):
 
             heatmap_points = points_rotated
 
-        sample = {'image': fplan,
-                  'label': segmentation,
-                  'scale': scale,
-                  'heatmaps': heatmap_points}
-
-        return sample
+        return {
+                'image': fplan,
+                'label': segmentation,
+                'heatmaps': heatmap_points,
+                'scale': scale,
+                'crop': sample['crop'],
+                'rotations': num_of_rotations,
+                'track_id': sample['track_id']}
 
 
 def clip_heatmaps(heatmaps, minx, maxx, miny, maxy):
@@ -107,7 +109,17 @@ class DictToTensor(object):
                     x -= 1
                 if y >= height:
                     y -= 1
-                heatmap_tensor[int(channel), int(y), int(x)] = 1
+                try:
+                    heatmap_tensor[int(channel), int(y), int(x)] = 1
+                except Exception as e:
+                    with open('/tmp/training-error', 'w') as fp:
+                        fp.write(str(e))
+                        fp.write('\n')
+                        fp.write(str(sample))
+                        fp.write('\n')
+                        fp.write(f'{channel} {x} {y}')
+                        fp.write('\n')
+                    raise e
 
         # Gaussian filter
         kernel = svg_utils.get_gaussian2D(int(30 * scale))
@@ -118,7 +130,12 @@ class DictToTensor(object):
 
         label = torch.cat((heatmap_tensor, label), 0)
 
-        return {'image': image, 'label': label}
+        result = {'image': image, 'label': label, 'scale': sample['scale'], 'track_id': sample['track_id']}
+        if 'crop' in sample:
+            result['crop'] = sample['crop']
+        if 'rotations' in sample:
+            result['rotations'] = sample['rotations']
+        return result
 
 
 class RotateNTurns(object):
@@ -266,8 +283,8 @@ class RandomCropToSizeTorch(object):
         label = torch.cat((new_rooms, new_icons), 0)
         image = new_image
 
-        removed_up = random.randint(0, new_h - self.width)
-        removed_left = random.randint(0, new_w - self.height)
+        removed_up = random.randrange(0, new_h - self.width)
+        removed_left = random.randrange(0, new_w - self.height)
 
         removed_down = new_h - self.height - removed_up
         removed_right = new_w - self.width - removed_left
@@ -300,7 +317,13 @@ class RandomCropToSizeTorch(object):
             heatmap_points = clip_heatmaps(heatmap_points, removed_left, removed_left + self.width, removed_up,
                                            removed_up + self.height)
 
-        return {'image': image, 'label': label, 'heatmaps': heatmap_points, 'scale': sample['scale']}
+        return {
+                'image': image,
+                'label': label,
+                'heatmaps': heatmap_points,
+                'scale': sample['scale'],
+                'crop': (removed_up, removed_left),
+                'track_id': sample['track_id']}
 
 
 class ColorJitterTorch(object):
